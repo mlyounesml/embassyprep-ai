@@ -81,12 +81,15 @@ export default function App() {
         });
       },
       onError: (code) => {
+        // Never kill the recording on transcription errors: the audio is still
+        // being captured, and scoring runs on whatever was heard (possibly
+        // nothing). The typed fallback below always stays available.
         if (code === 'not-allowed' || code === 'service-not-allowed') {
-          setError('Microphone blocked for transcription. Allow mic access and retry.');
-          setStatus('Idle');
+          setError('Voice transcription blocked in this browser — but recording continues. You can type the answer below instead.');
         } else if (code === 'network') {
-          setError('Transcription needs internet (browser service). Check connection and retry.');
-          setStatus('Idle');
+          setError(
+            'Voice transcription needs internet + Chrome/Edge (open the link in Chrome, not inside Facebook/WhatsApp). Recording continues — or type the answer below.',
+          );
         }
         // 'no-speech' / 'aborted' → onend path handles it
       },
@@ -268,7 +271,7 @@ export default function App() {
           </div>
         )}
 
-        {(!supported || status === 'Complete' || transcript) && (
+        {(!supported || error || status === 'Complete' || transcript) && (
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <label className="mb-1 block text-sm font-bold text-slate-600">
               {supported ? 'Or type the answer instead:' : 'Type the answer:'}
