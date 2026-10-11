@@ -1,25 +1,15 @@
-# EmbassyPrep AI — Yahya Interview Coach
+# EmbassyPrep AI — Yahya Interview Coach (keyless)
 
-React + Vite static app. Record answers in the browser, transcribe with
-OpenAI Whisper, evaluate with Google Gemini 2.5 Flash, retry until 80%+.
+React + Vite static app. Practice US Embassy youth-exchange interview questions
+with **zero API keys, zero accounts, zero cost**:
 
-## Keys (never in code or git)
-
-Keys are entered in the in-app **Keys** modal and live in that browser only.
-Uncheck “remember on this device” on shared computers — keys then stay in
-memory and vanish on reload. Format-checked (`sk-…`, `AIza…`).
-
-**Recommended:** run the optional proxy in `server/proxy.example.js` so keys
-never touch the browser at all, then build with:
-
-```bash
-VITE_PROXY_URL=https://your-proxy.example npm run build
-```
-
-## Parent consent
-
-Recording is gated behind a parent/guardian consent screen (COPPA-style):
-voice → OpenAI Whisper, text → Gemini, billed to your own keys.
+- 🎤 Record answers in the browser (playback included, Safari-friendly formats)
+- 🗣️ Live transcription via the browser's built-in speech recognition (Chrome/Edge)
+- ⌨️ Typed-answer mode for browsers without transcription
+- 📊 Transparent on-device scoring: pace (wpm) · fillers · pauses · key points
+- 🔊 Listen to every question and model answer (built-in speech synthesis)
+- 🔁 Mastery loop (80%+), Skip button, per-question history, clickable progress
+- 👪 Parent-consent gate before microphone use
 
 ## Run locally
 
@@ -40,11 +30,9 @@ GitHub Actions (`.github/workflows/pages.yml`) builds and deploys `dist/`
 to Pages on every push to `main`. One-time repo setup: Settings → Pages →
 **Source: GitHub Actions**.
 
-## Limits & cost guards
+## Honest limits
 
-- Recordings cap at 2:00 and 24MB (Whisper hard limit is 25MB).
-- 90s Whisper / 45s Gemini timeouts; one retry on 429/5xx only.
-- Failed evaluations reuse the cached transcript — transcription is never
-  billed twice for the same audio (“Evaluate again” button).
-- Strict JSON-schema evaluation (`responseMimeType: application/json` +
-  `responseSchema`); malformed scores throw instead of silently becoming 0.
+Scores are training estimates, not AI evaluation: grammar cannot be checked
+on-device (the app says so openly and shows a model answer to imitate instead).
+Chrome's built-in transcription may send voice snippets to Google servers
+(browser behavior); typed mode avoids that entirely.

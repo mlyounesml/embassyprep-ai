@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Mic, Square, Trash2 } from 'lucide-react';
-import { extensionFor } from '../services/whisperService.js';
 
-export const MAX_SECONDS = 120; // 2-minute cap keeps recordings far under the 25MB Whisper limit
+export const MAX_SECONDS = 120; // 2-minute cap keeps practice answers focused
 
 function formatTime(s) {
   const m = Math.floor(s / 60);
@@ -16,7 +15,7 @@ function pickMime() {
     try {
       if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(c)) return c;
     } catch {
-      // ignore and try next
+      // try next
     }
   }
   return '';
@@ -30,9 +29,10 @@ function isSecureContextOk() {
 
 const BARS = 12;
 
-export default function AudioRecorder({ status, onComplete, onRecordingStart }) {
+export default function AudioRecorder({ status, onRecordingStart, onStopRecording }) {
   const [seconds, setSeconds] = useState(0);
   const [audioUrl, setAudioUrl] = useState(null);
+  const [mimeLabel, setMimeLabel] = useState('webm');
   const [levels, setLevels] = useState(() => new Array(BARS).fill(0.1));
   const [error, setError] = useState('');
   const recorderRef = useRef(null);
@@ -42,9 +42,8 @@ export default function AudioRecorder({ status, onComplete, onRecordingStart }) 
   const audioCtxRef = useRef(null);
   const rafRef = useRef(null);
   const urlRef = useRef(null);
-  const recording = status === 'Recording';
+  const recording = status === 'Listening';
 
-  // Revoke any object URL when the question changes (remount) or unmounts.
   useEffect(
     () => () => {
       stopTracks();
@@ -76,15 +75,14 @@ export default function AudioRecorder({ status, onComplete, onRecordingStart }) 
         analyser.getByteFrequencyData(data);
         const bars = [];
         for (let i = 0; i < BARS; i++) {
-          const v = data[Math.floor((i * data.length) / BARS)] / 255;
-          bars.push(0.08 + v * 0.92);
+          bars.push(0.08 + (data[Math.floor((i * data.length) / BARS)] / 255) * 0.92);
         }
         setLevels(bars);
         rafRef.current = requestAnimationFrame(tick);
       };
       tick();
     } catch {
-      // Levels are decoration — recording works without them.
+      // levels are decoration — recording works without them
     }
   }
 
@@ -99,6 +97,7 @@ export default function AudioRecorder({ status, onComplete, onRecordingStart }) 
       streamRef.current = stream;
       chunksRef.current = [];
       const mime = pickMime();
+      setMimeLabel(mime.includes('mp4') ? 'mp4' : 'webm');
       const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
       recorderRef.current = rec;
       rec.ondataavailable = (e) => {
@@ -112,7 +111,7 @@ export default function AudioRecorder({ status, onComplete, onRecordingStart }) 
         urlRef.current = url;
         setAudioUrl(url);
         setLevels(new Array(BARS).fill(0.1));
-        onComplete(blob, url, type);
+        onStopRecording(blob, url);
         stopTracks();
       };
       rec.start();
@@ -147,6 +146,8 @@ export default function AudioRecorder({ status, onComplete, onRecordingStart }) 
     setSeconds(0);
   }
 
+  const busy = status === 'Scoring';
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       {!isSecureContextOk() && (
@@ -159,7 +160,7 @@ export default function AudioRecorder({ status, onComplete, onRecordingStart }) 
         {!recording ? (
           <button
             onClick={start}
-            disabled={status === 'Transcribing' || status === 'Evaluating'}
+            disabled={busy}
             className="flex items-center gap-2 rounded-xl bg-orange-500 px-5 py-3 font-bold text-white hover:bg-orange-600 disabled:opacity-50"
           >
             <Mic size={18} /> Record answer (max 2:00)
@@ -198,8 +199,7 @@ export default function AudioRecorder({ status, onComplete, onRecordingStart }) 
       {audioUrl && !recording && <audio controls src={audioUrl} className="mt-3 w-full" />}
       {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
       <p className="mt-2 text-xs text-slate-400">
-        Format: {extensionFor(pickMime() || 'audio/webm')} · kept in memory only · sent to Whisper
-        once per evaluation.
+        Playback format: {mimeLabel} · kept in memory only · transcription happens in your browser.
       </p>
     </div>
   );

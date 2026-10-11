@@ -1,37 +1,7 @@
-// API key + progress + consent persistence.
-// Keys live in this browser only. The key modal offers a session-only
-// (memory) mode so nothing is written to disk on shared devices.
+// Progress + consent persistence. No keys exist anywhere in this app.
 
-const OPENAI_KEY = 'embassyprep_openai_key';
-const GEMINI_KEY = 'embassyprep_gemini_key';
-const RESULTS_KEY = 'embassyprep_results_v2';
+const RESULTS_KEY = 'embassyprep_keyless_v1';
 const CONSENT_KEY = 'embassyprep_consent_v1';
-
-export function getKeys() {
-  try {
-    return {
-      openai: localStorage.getItem(OPENAI_KEY) || '',
-      gemini: localStorage.getItem(GEMINI_KEY) || '',
-    };
-  } catch {
-    return { openai: '', gemini: '' };
-  }
-}
-
-export function saveKeys({ openai, gemini }) {
-  localStorage.setItem(OPENAI_KEY, (openai || '').trim());
-  localStorage.setItem(GEMINI_KEY, (gemini || '').trim());
-}
-
-export function clearKeys() {
-  localStorage.removeItem(OPENAI_KEY);
-  localStorage.removeItem(GEMINI_KEY);
-}
-
-export function hasKeys() {
-  const { openai, gemini } = getKeys();
-  return Boolean(openai && gemini);
-}
 
 // Attempts: { [index]: { score, mastered, skipped, transcript, evaluation, at } }
 export function loadResults() {
@@ -70,12 +40,4 @@ export function saveConsent() {
   } catch {
     // non-fatal
   }
-}
-
-export function isValidOpenAIKey(v) {
-  return /^sk-(proj-)?[A-Za-z0-9-_]{10,}$/.test((v || '').trim());
-}
-
-export function isValidGeminiKey(v) {
-  return /^AIza[0-9A-Za-z-_]{20,}$/.test((v || '').trim());
 }

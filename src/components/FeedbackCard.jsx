@@ -1,6 +1,6 @@
 import { CheckCircle2, AlertTriangle, Quote } from 'lucide-react';
 
-export default function FeedbackCard({ transcript, evaluation }) {
+export default function FeedbackCard({ transcript, evaluation, modelAnswer, onListenModel }) {
   if (!evaluation) return null;
   const mastered = evaluation.mastered;
 
@@ -22,23 +22,31 @@ export default function FeedbackCard({ transcript, evaluation }) {
             <Quote size={14} className="mr-1 inline" />
             {transcript || '—'}
           </p>
-          <h3 className="mb-1 mt-4 text-sm font-bold uppercase text-slate-400">Grammar</h3>
-          <p className="text-sm text-slate-700">{evaluation.grammar}</p>
-          <h3 className="mb-1 mt-4 text-sm font-bold uppercase text-slate-400">Relevance</h3>
-          <p className="text-sm text-slate-700">{evaluation.relevance}</p>
+          <h3 className="mb-1 mt-4 text-sm font-bold uppercase text-slate-400">Measurements</h3>
+          <ul className="space-y-1 text-sm text-slate-700">
+            <li>📏 {evaluation.wordCount} words{evaluation.wpm !== null ? ` · ${evaluation.wpm} wpm` : ''}</li>
+            <li>🗣️ {evaluation.fillerCount} fillers (um, uh…) · ⏸️ {evaluation.pauseCount} long pauses</li>
+            <li>🎯 Key points: {evaluation.keywordHits.length}/{evaluation.keywordTotal}</li>
+          </ul>
+          <p className="mt-2 text-xs text-slate-400">{evaluation.paceLine}</p>
         </div>
         <div>
           <h3 className="mb-1 text-sm font-bold uppercase text-slate-400">Coach feedback</h3>
           <p className="text-sm text-slate-700">{evaluation.feedback}</p>
+          <h3 className="mb-1 mt-4 text-sm font-bold uppercase text-slate-400">Relevance</h3>
+          <p className="text-sm text-slate-700">{evaluation.relevance}</p>
           <h3 className="mb-1 mt-4 text-sm font-bold uppercase text-slate-400">
-            Say it faster like this
+            Model answer — read aloud twice
           </h3>
           <p className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm font-medium text-slate-800">
-            {evaluation.betterVersion}
+            {modelAnswer}
           </p>
-          <p className="mt-2 text-xs text-slate-400">
-            Read the orange box aloud twice, then hit Retry.
-          </p>
+          <button
+            onClick={onListenModel}
+            className="mt-2 rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-200"
+          >
+            🔊 Listen to model answer
+          </button>
         </div>
       </div>
     </div>

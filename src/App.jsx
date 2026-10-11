@@ -1,18 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, RotateCcw, Loader2, FastForward, RefreshCw } from 'lucide-react';
+import { ArrowLeft, ArrowRight, RotateCcw, Loader2, FastForward, Keyboard } from 'lucide-react';
+import QUESTIONS from './data/questions.js';
 import Header from './components/Header.jsx';
 import QuestionCard from './components/QuestionCard.jsx';
 import AudioRecorder from './components/AudioRecorder.jsx';
 import FeedbackCard from './components/FeedbackCard.jsx';
 import ProgressTracker from './components/ProgressTracker.jsx';
-import ApiKeyModal from './components/ApiKeyModal.jsx';
 import ConsentModal from './components/ConsentModal.jsx';
-import { transcribeAudio } from './services/whisperService.js';
-import { evaluateAnswer } from './services/geminiService.js';
+import { analyzeAnswer } from './services/localEval.js';
 import {
-  getKeys,
-  saveKeys,
-  clearKeys,
+  speechSupported,
+  createRecognition,
+  speak,
+  stopSpeaking,
+} from './services/browserSpeech.js';
+import {
   loadResults,
   saveResults,
   clearResults,
@@ -20,104 +22,35 @@ import {
   saveConsent,
 } from './utils/storage.js';
 
-const QUESTIONS = [
-  {
-    category: 'Embassy · Motive',
-    en: 'Why do you want to join this youth exchange program?',
-    ar: 'ليه عايز تشترك في برنامج التبادل؟',
-    tip: 'Link English + new friends + future study. 3 short sentences.',
-  },
-  {
-    category: 'Embassy · Home ties',
-    en: 'Tell us about your school life in Egypt.',
-    ar: 'احكي عن حياتك المدرسية في مصر.',
-    tip: 'Name grade, favorite subject, one activity.',
-  },
-  {
-    category: 'Embassy · Future',
-    en: 'What do you want to study or become in the future?',
-    ar: 'نفسك تدرس إيه أو تبقى إيه؟',
-    tip: 'One dream job + how English helps it.',
-  },
-  {
-    category: 'Embassy · Culture',
-    en: 'If you meet an American student your age, what will you tell him about Egypt?',
-    ar: 'لو قابلت طالب أمريكي، هتحكيله إيه عن مصر؟',
-    tip: 'History + food + kind people. Show pride.',
-  },
-  {
-    category: 'Embassy · Adaptation',
-    en: 'What would you like to learn about other cultures?',
-    ar: 'تحب تعرف إيه عن الثقافات التانية؟',
-    tip: 'Their thinking, language, youth interests.',
-  },
-  {
-    category: 'Yahya · Volunteering',
-    en: 'You volunteer at Resala Charity. What do you do there?',
-    ar: 'بتعمل إيه في تطوع رسالة؟',
-    tip: 'Use: "I volunteer at Resala to help people in need. I help pack bags and sort clothes."',
-  },
-  {
-    category: 'Yahya · Teamwork',
-    en: 'If a teammate does not participate in a group project, what will you do?',
-    ar: 'لو زميلك مش بيشارك في مشروع جماعي هتعمل إيه؟',
-    tip: 'Encourage + split the task + succeed together.',
-  },
-  {
-    category: 'Yahya · Hobbies',
-    en: 'What do you do in your free time? Tell us about football, boxing, chess, or gaming.',
-    ar: 'بتعمل إيه في وقت فراغك؟',
-    tip: 'Pick 1-2 real hobbies + what each teaches you.',
-  },
-  {
-    category: 'Yahya · Challenge',
-    en: 'What is your biggest challenge in English right now?',
-    ar: 'إيه أصعب حاجة في الإنجليزي دلوقتي؟',
-    tip: 'Honest + positive: "I understand well, but I hesitate when I speak fast."',
-  },
-  {
-    category: 'Yahya · AI learning',
-    en: 'How do you use AI tools to learn?',
-    ar: 'بتستخدم الذكاء الاصطناعي إزاي في التعلم؟',
-    tip: 'Tool for ideas and explanations — YOU decide and execute.',
-  },
-];
-
 const STATUS_LABEL = {
   Idle: 'Idle — press Record',
-  Recording: 'Recording… speak clearly',
-  Transcribing: 'Transcribing with Whisper…',
-  Evaluating: 'Evaluating with Gemini…',
+  Listening: 'Listening… speak clearly',
+  Scoring: 'Scoring on your device…',
   Complete: 'Complete — check feedback',
 };
+
+const PAUSE_GAP_MS = 1500;
 
 export default function App() {
   const [current, setCurrent] = useState(0);
   const [status, setStatus] = useState('Idle');
   const [results, setResults] = useState(() => loadResults());
-  const [keys, setKeys] = useState(() => getKeys());
-  const [remember, setRemember] = useState(true);
-  const [showKeys, setShowKeys] = useState(false);
   const [consented, setConsented] = useState(() => hasConsent());
   const [error, setError] = useState('');
-  const lastBlobRef = useRef(null);
+  const [interim, setInterim] = useState('');
+  const [typed, setTyped] = useState('');
+  const recRef = useRef(null);
+  const finalsRef = useRef([]);
+  const supported = speechSupported();
 
-  useEffect(() => {
-    const k = getKeys();
-    if (!k.openai || !k.gemini) setShowKeys(true);
-  }, []);
+  useEffect(() => () => stopSpeaking(), []);
 
   const question = QUESTIONS[current];
   const attempt = results[current] || {};
   const transcript = attempt.transcript || '';
   const evaluation = attempt.evaluation || null;
   const locked = Boolean(evaluation && !evaluation.mastered && !attempt.skipped);
-  const busy = status === 'Transcribing' || status === 'Evaluating' || status === 'Recording';
-
-  function activeKeys() {
-    // Memory-only mode: keys live in state, never touch disk.
-    return keys;
-  }
+  const busy = status === 'Listening' || status === 'Scoring';
 
   function persist(next) {
     setResults(next);
@@ -128,98 +61,133 @@ export default function App() {
     persist({ ...results, [i]: { ...(results[i] || {}), ...patch, at: Date.now() } });
   }
 
-  function handleSaveKeys({ openai, gemini, remember: keep }) {
-    const prev = getKeys();
-    const next = {
-      openai: (openai.trim() || (keep ? prev.openai : keys.openai)).trim(),
-      gemini: (gemini.trim() || (keep ? prev.gemini : keys.gemini)).trim(),
-    };
-    setRemember(keep);
-    if (keep) saveKeys(next);
-    else clearKeys();
-    setKeys(next);
-    setError('');
-    if (next.openai && next.gemini) setShowKeys(false);
-    else setError('Both keys are required to start.');
-  }
-
-  function handleClearKeys() {
-    clearKeys();
-    setKeys({ openai: '', gemini: '' });
-    setShowKeys(true);
-  }
-
-  async function runPipeline(blob, i) {
-    const k = activeKeys();
-    if (!k.openai || !k.gemini) {
-      setShowKeys(true);
-      setError('Add both API keys first (Keys button).');
-      setStatus('Idle');
-      return;
-    }
+  function startRecognition() {
+    finalsRef.current = [];
+    setInterim('');
+    const rec = createRecognition({
+      onInterim: (t) => setInterim(t),
+      onFinal: (text, at) => {
+        const arr = finalsRef.current;
+        if (arr.length > 0 && at - arr[arr.length - 1].at > PAUSE_GAP_MS) {
+          arr.pauses = (arr.pauses || 0) + 1;
+        }
+        arr.push({ text, at });
+      },
+      onEnd: () => {
+        // onend fires after stop(); finalize only if we were scoring.
+        setStatus((s) => {
+          if (s === 'Scoring') setTimeout(finalize, 0);
+          return s;
+        });
+      },
+      onError: (code) => {
+        if (code === 'not-allowed' || code === 'service-not-allowed') {
+          setError('Microphone blocked for transcription. Allow mic access and retry.');
+          setStatus('Idle');
+        } else if (code === 'network') {
+          setError('Transcription needs internet (browser service). Check connection and retry.');
+          setStatus('Idle');
+        }
+        // 'no-speech' / 'aborted' → onend path handles it
+      },
+    });
+    recRef.current = rec;
     try {
-      setStatus('Transcribing');
-      // Fresh recording: always transcribe. A failed *evaluation* later
-      // reuses the cached transcript and never bills Whisper twice.
-      const text = await transcribeAudio(blob, PROXY_MODE ? '' : k.openai);
-      lastBlobRef.current = { blob, text };
-      setAttempt(i, { transcript: text });
-      setStatus('Evaluating');
-      const ev = await evaluateAnswer(QUESTIONS[i].en, text, PROXY_MODE ? '' : k.gemini);
-      setAttempt(i, { transcript: text, evaluation: ev, score: ev.fluencyScore, mastered: ev.mastered, skipped: false });
-      setStatus('Complete');
-    } catch (e) {
+      rec.start();
+    } catch {
+      setError('Could not start transcription. Type your answer below instead.');
+    }
+  }
+
+  function finalize() {
+    const finals = finalsRef.current;
+    const text = finals.map((f) => f.text).join(' ').trim();
+    setInterim('');
+    if (!text) {
+      setError('No speech detected — speak louder/closer, or type your answer below.');
       setStatus('Idle');
-      setError(e.message || 'Pipeline failed.');
+      return;
     }
+    const durationSec =
+      finals.length > 1
+        ? Math.max(1, Math.round((finals[finals.length - 1].at - finals[0].at) / 1000))
+        : Math.max(1, Math.round(text.split(/\s+/).length / 2));
+    const ev = analyzeAnswer({
+      transcript: text,
+      durationSec,
+      pauseCount: finals.pauses || 0,
+      keywords: question.keywords,
+    });
+    setAttempt(current, {
+      transcript: text,
+      evaluation: ev,
+      score: ev.fluencyScore,
+      mastered: ev.mastered,
+      skipped: false,
+    });
+    setStatus('Complete');
   }
 
-  function handleRecordingComplete(blob) {
+  function handleRecordingStart() {
     setError('');
-    lastBlobRef.current = null;
-    runPipeline(blob, current);
+    stopSpeaking();
+    setStatus('Listening');
+    startRecognition();
   }
 
-  function handleEvaluateAgain() {
-    setError('');
-    const b = lastBlobRef.current;
-    if (!b?.blob) {
-      setError('No saved recording — record an answer first.');
-      return;
+  function handleStopRecording() {
+    // Stop transcription, then score from collected finals.
+    setStatus('Scoring');
+    try {
+      recRef.current?.stop();
+    } catch {
+      // fall through
     }
-    if (!transcript) {
-      runPipeline(b.blob, current);
-      return;
-    }
-    // Transcript cached: only the (cheaper) Gemini step runs again.
-    const k = activeKeys();
-    if (!k.gemini) {
-      setShowKeys(true);
-      return;
-    }
-    setStatus('Evaluating');
-    evaluateAnswer(question.en, transcript, PROXY_MODE ? '' : k.gemini)
-      .then((ev) => {
-        setAttempt(current, { evaluation: ev, score: ev.fluencyScore, mastered: ev.mastered, skipped: false });
-        setStatus('Complete');
-      })
-      .catch((e) => {
-        setStatus('Idle');
-        setError(e.message || 'Evaluation failed.');
+    // Safety net if onend never fires.
+    setTimeout(() => {
+      setStatus((s) => {
+        if (s === 'Scoring') setTimeout(finalize, 0);
+        return s;
       });
+    }, 2000);
+  }
+
+  function handleAnalyzeTyped() {
+    const text = typed.trim();
+    if (words(text) < 3) {
+      setError('Type at least a full sentence, then analyze.');
+      return;
+    }
+    setError('');
+    const ev = analyzeAnswer({ transcript: text, durationSec: null, pauseCount: 0, keywords: question.keywords });
+    setAttempt(current, {
+      transcript: text,
+      evaluation: ev,
+      score: ev.fluencyScore,
+      mastered: ev.mastered,
+      skipped: false,
+    });
+    setStatus('Complete');
+  }
+
+  function words(t) {
+    return t.trim() ? t.trim().split(/\s+/).length : 0;
   }
 
   function resetAttempt() {
-    lastBlobRef.current = null;
     const { ...rest } = results;
     delete rest[current];
     persist(rest);
+    setTyped('');
+    setInterim('');
     setError('');
     setStatus('Idle');
   }
 
   function skipQuestion() {
     setAttempt(current, { skipped: true });
+    setTyped('');
+    setInterim('');
     setError('');
     setStatus('Idle');
     if (current < QUESTIONS.length - 1) setCurrent(current + 1);
@@ -227,8 +195,15 @@ export default function App() {
 
   function goTo(i) {
     if (busy || i < 0 || i >= QUESTIONS.length) return;
-    lastBlobRef.current = null;
+    stopSpeaking();
+    try {
+      recRef.current?.stop();
+    } catch {
+      // ignore
+    }
     setCurrent(i);
+    setTyped('');
+    setInterim('');
     setError('');
     setStatus('Idle');
   }
@@ -236,7 +211,8 @@ export default function App() {
   function handleResetAll() {
     clearResults();
     setResults({});
-    lastBlobRef.current = null;
+    setTyped('');
+    setInterim('');
     setError('');
     setStatus('Idle');
     setCurrent(0);
@@ -244,7 +220,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100">
-      <Header onOpenKeys={() => setShowKeys(true)} onReset={handleResetAll} />
+      <Header onReset={handleResetAll} />
 
       <main className="mx-auto flex max-w-4xl flex-col gap-4 px-4 py-6">
         <ProgressTracker
@@ -255,34 +231,68 @@ export default function App() {
           disabled={busy}
         />
 
-        <QuestionCard question={question} index={current} total={QUESTIONS.length} />
+        <QuestionCard
+          question={question}
+          index={current}
+          total={QUESTIONS.length}
+          onListen={() => speak(question.en)}
+        />
 
         <div className="flex items-center gap-2 text-sm font-semibold text-slate-600">
           {busy && <Loader2 size={16} className="animate-spin" />}
           Status: {STATUS_LABEL[status]}
         </div>
 
-        <AudioRecorder
-          key={current}
-          status={status}
-          onRecordingStart={() => {
-            setError('');
-            setStatus('Recording');
-          }}
-          onComplete={(blob) => handleRecordingComplete(blob)}
-        />
+        {supported ? (
+          <AudioRecorder
+            key={current}
+            status={status}
+            onRecordingStart={handleRecordingStart}
+            onStopRecording={handleStopRecording}
+          />
+        ) : (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+            <p className="text-sm font-bold text-amber-800">
+              <Keyboard size={15} className="mr-1 inline" />
+              Your browser has no built-in transcription (use Chrome/Edge for voice mode).
+            </p>
+            <p className="mt-1 text-sm text-amber-700">
+              Type Yahya&apos;s answer below — scoring works the same, only pace timing is skipped.
+            </p>
+          </div>
+        )}
+
+        {(interim || status === 'Listening') && (
+          <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
+            {interim ? <>Hearing: “{interim}…”</> : 'Listening… start speaking.'}
+          </div>
+        )}
+
+        {(!supported || status === 'Complete' || transcript) && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <label className="mb-1 block text-sm font-bold text-slate-600">
+              {supported ? 'Or type the answer instead:' : 'Type the answer:'}
+            </label>
+            <textarea
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              rows={3}
+              placeholder="Type Yahya's answer in English here…"
+              className="w-full rounded-lg border px-3 py-2 text-sm"
+            />
+            <button
+              onClick={handleAnalyzeTyped}
+              disabled={busy}
+              className="mt-2 rounded-xl bg-slate-800 px-4 py-2 text-sm font-bold text-white disabled:opacity-40"
+            >
+              Analyze typed answer
+            </button>
+          </div>
+        )}
 
         {error && (
           <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
             {error}
-            {lastBlobRef.current && (
-              <button
-                onClick={handleEvaluateAgain}
-                className="ml-2 inline-flex items-center gap-1 rounded-lg bg-red-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-red-700"
-              >
-                <RefreshCw size={13} /> {transcript ? 'Evaluate again (no re-record)' : 'Transcribe again (no re-record)'}
-              </button>
-            )}
           </div>
         )}
 
@@ -293,7 +303,12 @@ export default function App() {
           </div>
         )}
 
-        <FeedbackCard transcript={transcript} evaluation={evaluation} />
+        <FeedbackCard
+          transcript={transcript}
+          evaluation={evaluation}
+          modelAnswer={question.model}
+          onListenModel={() => speak(question.model)}
+        />
 
         <div className="flex flex-wrap gap-2">
           <button
@@ -306,7 +321,7 @@ export default function App() {
           <button
             onClick={resetAttempt}
             disabled={busy}
-            title="Clear this attempt and record again"
+            title="Clear this attempt and try again"
             className="flex items-center gap-2 rounded-xl bg-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700 disabled:opacity-40"
           >
             <RotateCcw size={16} /> Retry question
@@ -331,32 +346,19 @@ export default function App() {
 
         {locked && (
           <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-            🔒 Fluency {evaluation.fluencyScore}% is below 80%. Read the orange box aloud twice and
-            press “Retry question” — or press “Skip” to continue and come back later.
+            🔒 Fluency {evaluation.fluencyScore}% is below 80%. Read the model answer aloud twice
+            and press “Retry question” — or press “Skip” and come back later.
           </p>
         )}
 
         <footer className="pb-8 pt-2 text-center text-xs text-slate-400">
-          Audio → OpenAI Whisper, text → Gemini {PROXY_MODE ? 'via your private proxy' : 'directly'} —
-          one request per step, failed evaluations never re-bill transcription. No keys in code or
-          git. Parental consent required before recording.
+          Keyless practice: transcription + scoring happen in this browser. No accounts, no cost.
+          Scores are training estimates (pace · fillers · pauses · key points) — not an official
+          evaluation.
         </footer>
       </main>
 
       <ConsentModal open={!consented} onAccept={() => { saveConsent(); setConsented(true); }} />
-      <ApiKeyModal
-        open={showKeys}
-        initial={remember ? getKeys() : keys}
-        canClose={Boolean(activeKeys().openai && activeKeys().gemini)}
-        remember={remember}
-        onSave={handleSaveKeys}
-        onClear={handleClearKeys}
-        onClose={() => setShowKeys(false)}
-      />
     </div>
   );
 }
-
-// True when the app routes API calls through a self-hosted proxy
-// (VITE_PROXY_URL set at build time) instead of calling providers directly.
-const PROXY_MODE = Boolean(import.meta.env.VITE_PROXY_URL);

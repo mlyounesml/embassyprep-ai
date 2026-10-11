@@ -16,13 +16,13 @@ export default function ConsentModal({ open, onAccept }) {
         </div>
         <div className="mb-4 space-y-2 text-sm text-slate-600">
           <p>
-            EmbassyPrep AI records Yahya&apos;s voice in the browser. Each evaluation sends the{' '}
-            <b>audio to OpenAI Whisper</b> (speech-to-text) and the <b>text to Google Gemini</b>{' '}
-            (feedback). Requests are billed to your own API keys.
+            This practice app uses <b>only the browser</b>: microphone recording, on-screen
+            playback, built-in speech transcription, and on-device scoring. There are{' '}
+            <b>no accounts, no API keys, no paid services, no tracking, no ads</b>.
           </p>
           <p>
-            Recordings stay in this browser&apos;s memory and are never uploaded anywhere else by
-            this app. No account, no tracking, no ads.
+            Note: in Chrome, the built-in transcription feature may send voice snippets to Google
+            servers (browser behavior, not this app). Nothing is stored anywhere by us.
           </p>
         </div>
         <label className="mb-4 flex items-start gap-2 text-sm text-slate-700">
@@ -32,7 +32,7 @@ export default function ConsentModal({ open, onAccept }) {
             onChange={(e) => setChecked(e.target.checked)}
             className="mt-1"
           />
-          I am Yahya&apos;s parent/guardian and I consent to this voice processing for practice.
+          I am Yahya&apos;s parent/guardian and I allow microphone practice in this browser.
         </label>
         <button
           onClick={() => checked && onAccept()}

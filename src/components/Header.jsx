@@ -1,6 +1,6 @@
-import { KeyRound, RotateCcw, GraduationCap } from 'lucide-react';
+import { RotateCcw, GraduationCap } from 'lucide-react';
 
-export default function Header({ onOpenKeys, onReset }) {
+export default function Header({ onReset }) {
   return (
     <header className="bg-slate-900 text-white">
       <div className="mx-auto flex max-w-4xl flex-wrap items-center gap-3 px-4 py-4">
@@ -12,15 +12,9 @@ export default function Header({ onOpenKeys, onReset }) {
             EmbassyPrep <span className="text-orange-400">AI</span>
           </h1>
           <p className="truncate text-sm text-slate-300">
-            Yahya&apos;s interview coach — record, transcribe, master every question
+            Yahya&apos;s interview coach — no keys, works in your browser
           </p>
         </div>
-        <button
-          onClick={onOpenKeys}
-          className="flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700"
-        >
-          <KeyRound size={16} /> Keys
-        </button>
         <button
           onClick={onReset}
           title="Clear progress"

@@ -1,4 +1,4 @@
-export default function QuestionCard({ question, index, total }) {
+export default function QuestionCard({ question, index, total, onListen }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide">
@@ -11,6 +11,12 @@ export default function QuestionCard({ question, index, total }) {
       </div>
       <h2 className="text-xl font-bold text-slate-900">{question.en}</h2>
       {question.ar && <p className="mt-1 text-sm text-slate-500">{question.ar}</p>}
+      <button
+        onClick={onListen}
+        className="mt-3 rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-200"
+      >
+        🔊 Listen to question
+      </button>
       {question.tip && (
         <p className="mt-3 rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
           💡 Tip: {question.tip}
