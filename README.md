@@ -1,41 +1,50 @@
 # EmbassyPrep AI — Yahya Interview Coach
 
 React + Vite static app. Record answers in the browser, transcribe with
-OpenAI Whisper, evaluate with Google Gemini 1.5 Flash, retry until 80%+.
+OpenAI Whisper, evaluate with Google Gemini 2.5 Flash, retry until 80%+.
 
-## Keys (never in code)
+## Keys (never in code or git)
 
-Keys live only in the browser `localStorage`, entered via the in-app
-**Keys** modal. Never commit them, never paste them in chat.
+Keys are entered in the in-app **Keys** modal and live in that browser only.
+Uncheck “remember on this device” on shared computers — keys then stay in
+memory and vanish on reload. Format-checked (`sk-…`, `AIza…`).
+
+**Recommended:** run the optional proxy in `server/proxy.example.js` so keys
+never touch the browser at all, then build with:
+
+```bash
+VITE_PROXY_URL=https://your-proxy.example npm run build
+```
+
+## Parent consent
+
+Recording is gated behind a parent/guardian consent screen (COPPA-style):
+voice → OpenAI Whisper, text → Gemini, billed to your own keys.
 
 ## Run locally
 
 ```bash
-cd embassyprep-ai
 npm.cmd install
 npm.cmd run dev
 ```
 
-## Static build (GitHub Pages ready)
+## Build
 
 ```bash
-npm.cmd run build
+npm.cmd run build   # static output in dist/, relative paths for any subpath
 ```
 
-Output is `dist/` with relative asset paths (`base: './'`), so it works
-from any Pages subpath. Upload `dist/` to Pages, or push this folder to a
-repo and enable Pages on the `dist` output via an Action.
+## Deploy
 
-## Secure push (do NOT paste tokens in chat)
+GitHub Actions (`.github/workflows/pages.yml`) builds and deploys `dist/`
+to Pages on every push to `main`. One-time repo setup: Settings → Pages →
+**Source: GitHub Actions**.
 
-```bash
-cd embassyprep-ai
-git init
-git add .
-git commit -m "EmbassyPrep AI"
-gh auth login
-gh repo create embassyprep-ai --public --source=. --push
-```
+## Limits & cost guards
 
-If `gh` is unavailable, create the repo on github.com and push with the
-credential manager — never hardcode a PAT in commands or files.
+- Recordings cap at 2:00 and 24MB (Whisper hard limit is 25MB).
+- 90s Whisper / 45s Gemini timeouts; one retry on 429/5xx only.
+- Failed evaluations reuse the cached transcript — transcription is never
+  billed twice for the same audio (“Evaluate again” button).
+- Strict JSON-schema evaluation (`responseMimeType: application/json` +
+  `responseSchema`); malformed scores throw instead of silently becoming 0.

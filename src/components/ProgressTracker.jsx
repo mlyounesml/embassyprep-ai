@@ -1,4 +1,4 @@
-export default function ProgressTracker({ questions, results, current }) {
+export default function ProgressTracker({ questions, results, current, onSelect, disabled }) {
   const mastered = Object.values(results).filter((r) => r?.mastered).length;
   const pct = questions.length ? Math.round((mastered / questions.length) * 100) : 0;
 
@@ -19,20 +19,30 @@ export default function ProgressTracker({ questions, results, current }) {
       <div className="mt-3 flex flex-wrap gap-1.5">
         {questions.map((q, i) => {
           const r = results[i];
-          const cls = i === current
-            ? 'bg-slate-900 text-white'
-            : r?.mastered
-              ? 'bg-green-500 text-white'
-              : r
-                ? 'bg-amber-400 text-white'
-                : 'bg-slate-100 text-slate-500';
+          const cls =
+            i === current
+              ? 'bg-slate-900 text-white'
+              : r?.mastered
+                ? 'bg-green-500 text-white'
+                : r?.skipped
+                  ? 'bg-slate-300 text-slate-600'
+                  : r
+                    ? 'bg-amber-400 text-white'
+                    : 'bg-slate-100 text-slate-500';
           return (
-            <span key={i} title={q.en} className={`rounded-md px-2 py-1 text-xs font-bold ${cls}`}>
+            <button
+              key={i}
+              title={q.en}
+              onClick={() => onSelect(i)}
+              disabled={disabled || i === current}
+              className={`rounded-md px-2.5 py-1 text-xs font-bold ${cls} disabled:cursor-default enabled:hover:ring-2 enabled:hover:ring-orange-300`}
+            >
               {i + 1}
-            </span>
+            </button>
           );
         })}
       </div>
+      <p className="mt-2 text-xs text-slate-400">Tap a number to jump to that question.</p>
     </div>
   );
 }

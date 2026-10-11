@@ -1,19 +1,23 @@
-import { useEffect, useState } from 'react';
-import { ArrowLeft, ArrowRight, RotateCcw, Loader2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ArrowLeft, ArrowRight, RotateCcw, Loader2, FastForward, RefreshCw } from 'lucide-react';
 import Header from './components/Header.jsx';
 import QuestionCard from './components/QuestionCard.jsx';
 import AudioRecorder from './components/AudioRecorder.jsx';
 import FeedbackCard from './components/FeedbackCard.jsx';
 import ProgressTracker from './components/ProgressTracker.jsx';
 import ApiKeyModal from './components/ApiKeyModal.jsx';
+import ConsentModal from './components/ConsentModal.jsx';
 import { transcribeAudio } from './services/whisperService.js';
 import { evaluateAnswer } from './services/geminiService.js';
 import {
   getKeys,
   saveKeys,
+  clearKeys,
   loadResults,
   saveResults,
   clearResults,
+  hasConsent,
+  saveConsent,
 } from './utils/storage.js';
 
 const QUESTIONS = [
@@ -90,12 +94,13 @@ const STATUS_LABEL = {
 export default function App() {
   const [current, setCurrent] = useState(0);
   const [status, setStatus] = useState('Idle');
-  const [transcript, setTranscript] = useState('');
-  const [evaluation, setEvaluation] = useState(null);
   const [results, setResults] = useState(() => loadResults());
   const [keys, setKeys] = useState(() => getKeys());
+  const [remember, setRemember] = useState(true);
   const [showKeys, setShowKeys] = useState(false);
+  const [consented, setConsented] = useState(() => hasConsent());
   const [error, setError] = useState('');
+  const lastBlobRef = useRef(null);
 
   useEffect(() => {
     const k = getKeys();
@@ -103,25 +108,49 @@ export default function App() {
   }, []);
 
   const question = QUESTIONS[current];
-  const locked = Boolean(evaluation && !evaluation.mastered);
+  const attempt = results[current] || {};
+  const transcript = attempt.transcript || '';
+  const evaluation = attempt.evaluation || null;
+  const locked = Boolean(evaluation && !evaluation.mastered && !attempt.skipped);
   const busy = status === 'Transcribing' || status === 'Evaluating' || status === 'Recording';
 
-  function handleSaveKeys({ openai, gemini }) {
+  function activeKeys() {
+    // Memory-only mode: keys live in state, never touch disk.
+    return keys;
+  }
+
+  function persist(next) {
+    setResults(next);
+    saveResults(next);
+  }
+
+  function setAttempt(i, patch) {
+    persist({ ...results, [i]: { ...(results[i] || {}), ...patch, at: Date.now() } });
+  }
+
+  function handleSaveKeys({ openai, gemini, remember: keep }) {
     const prev = getKeys();
     const next = {
-      openai: openai.trim() || prev.openai,
-      gemini: gemini.trim() || prev.gemini,
+      openai: (openai.trim() || (keep ? prev.openai : keys.openai)).trim(),
+      gemini: (gemini.trim() || (keep ? prev.gemini : keys.gemini)).trim(),
     };
-    saveKeys(next);
+    setRemember(keep);
+    if (keep) saveKeys(next);
+    else clearKeys();
     setKeys(next);
     setError('');
     if (next.openai && next.gemini) setShowKeys(false);
     else setError('Both keys are required to start.');
   }
 
-  async function handleRecordingComplete(blob) {
-    setError('');
-    const k = getKeys();
+  function handleClearKeys() {
+    clearKeys();
+    setKeys({ openai: '', gemini: '' });
+    setShowKeys(true);
+  }
+
+  async function runPipeline(blob, i) {
+    const k = activeKeys();
     if (!k.openai || !k.gemini) {
       setShowKeys(true);
       setError('Add both API keys first (Keys button).');
@@ -130,16 +159,14 @@ export default function App() {
     }
     try {
       setStatus('Transcribing');
-      const text = await transcribeAudio(blob, k.openai);
-      setTranscript(text);
+      // Fresh recording: always transcribe. A failed *evaluation* later
+      // reuses the cached transcript and never bills Whisper twice.
+      const text = await transcribeAudio(blob, PROXY_MODE ? '' : k.openai);
+      lastBlobRef.current = { blob, text };
+      setAttempt(i, { transcript: text });
       setStatus('Evaluating');
-      const ev = await evaluateAnswer(question.en, text, k.gemini);
-      setEvaluation(ev);
-      setResults((prev) => {
-        const next = { ...prev, [current]: { score: ev.fluencyScore, mastered: ev.mastered } };
-        saveResults(next);
-        return next;
-      });
+      const ev = await evaluateAnswer(QUESTIONS[i].en, text, PROXY_MODE ? '' : k.gemini);
+      setAttempt(i, { transcript: text, evaluation: ev, score: ev.fluencyScore, mastered: ev.mastered, skipped: false });
       setStatus('Complete');
     } catch (e) {
       setStatus('Idle');
@@ -147,23 +174,71 @@ export default function App() {
     }
   }
 
+  function handleRecordingComplete(blob) {
+    setError('');
+    lastBlobRef.current = null;
+    runPipeline(blob, current);
+  }
+
+  function handleEvaluateAgain() {
+    setError('');
+    const b = lastBlobRef.current;
+    if (!b?.blob) {
+      setError('No saved recording — record an answer first.');
+      return;
+    }
+    if (!transcript) {
+      runPipeline(b.blob, current);
+      return;
+    }
+    // Transcript cached: only the (cheaper) Gemini step runs again.
+    const k = activeKeys();
+    if (!k.gemini) {
+      setShowKeys(true);
+      return;
+    }
+    setStatus('Evaluating');
+    evaluateAnswer(question.en, transcript, PROXY_MODE ? '' : k.gemini)
+      .then((ev) => {
+        setAttempt(current, { evaluation: ev, score: ev.fluencyScore, mastered: ev.mastered, skipped: false });
+        setStatus('Complete');
+      })
+      .catch((e) => {
+        setStatus('Idle');
+        setError(e.message || 'Evaluation failed.');
+      });
+  }
+
   function resetAttempt() {
-    setTranscript('');
-    setEvaluation(null);
+    lastBlobRef.current = null;
+    const { ...rest } = results;
+    delete rest[current];
+    persist(rest);
     setError('');
     setStatus('Idle');
   }
 
+  function skipQuestion() {
+    setAttempt(current, { skipped: true });
+    setError('');
+    setStatus('Idle');
+    if (current < QUESTIONS.length - 1) setCurrent(current + 1);
+  }
+
   function goTo(i) {
-    if (i < 0 || i >= QUESTIONS.length) return;
+    if (busy || i < 0 || i >= QUESTIONS.length) return;
+    lastBlobRef.current = null;
     setCurrent(i);
-    resetAttempt();
+    setError('');
+    setStatus('Idle');
   }
 
   function handleResetAll() {
     clearResults();
     setResults({});
-    resetAttempt();
+    lastBlobRef.current = null;
+    setError('');
+    setStatus('Idle');
     setCurrent(0);
   }
 
@@ -172,7 +247,13 @@ export default function App() {
       <Header onOpenKeys={() => setShowKeys(true)} onReset={handleResetAll} />
 
       <main className="mx-auto flex max-w-4xl flex-col gap-4 px-4 py-6">
-        <ProgressTracker questions={QUESTIONS} results={results} current={current} />
+        <ProgressTracker
+          questions={QUESTIONS}
+          results={results}
+          current={current}
+          onSelect={goTo}
+          disabled={busy}
+        />
 
         <QuestionCard question={question} index={current} total={QUESTIONS.length} />
 
@@ -182,6 +263,7 @@ export default function App() {
         </div>
 
         <AudioRecorder
+          key={current}
           status={status}
           onRecordingStart={() => {
             setError('');
@@ -193,6 +275,14 @@ export default function App() {
         {error && (
           <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
             {error}
+            {lastBlobRef.current && (
+              <button
+                onClick={handleEvaluateAgain}
+                className="ml-2 inline-flex items-center gap-1 rounded-lg bg-red-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-red-700"
+              >
+                <RefreshCw size={13} /> {transcript ? 'Evaluate again (no re-record)' : 'Transcribe again (no re-record)'}
+              </button>
+            )}
           </div>
         )}
 
@@ -215,15 +305,24 @@ export default function App() {
           </button>
           <button
             onClick={resetAttempt}
-            disabled={busy && status !== 'Complete'}
+            disabled={busy}
+            title="Clear this attempt and record again"
             className="flex items-center gap-2 rounded-xl bg-slate-200 px-4 py-2.5 text-sm font-bold text-slate-700 disabled:opacity-40"
           >
             <RotateCcw size={16} /> Retry question
           </button>
           <button
+            onClick={skipQuestion}
+            disabled={busy || current >= QUESTIONS.length - 1}
+            title="Skip without mastering — marked grey, never blocks progress"
+            className="flex items-center gap-2 rounded-xl bg-slate-500 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40"
+          >
+            <FastForward size={16} /> Skip
+          </button>
+          <button
             onClick={() => goTo(current + 1)}
             disabled={current >= QUESTIONS.length - 1 || locked || busy}
-            title={locked ? 'Score 80%+ to unlock Next' : 'Next question'}
+            title={locked ? 'Score 80%+ or Skip to continue' : 'Next question'}
             className="flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40"
           >
             Next <ArrowRight size={16} />
@@ -232,18 +331,32 @@ export default function App() {
 
         {locked && (
           <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-            🔒 Next is locked — fluency {evaluation.fluencyScore}% is below 80%. Read the orange
-            box aloud twice and press “Retry question”.
+            🔒 Fluency {evaluation.fluencyScore}% is below 80%. Read the orange box aloud twice and
+            press “Retry question” — or press “Skip” to continue and come back later.
           </p>
         )}
 
         <footer className="pb-8 pt-2 text-center text-xs text-slate-400">
-          Keys stay in this browser only. Audio goes to OpenAI Whisper, text goes to Gemini — one
-          request per evaluation. No keys in code or git.
+          Audio → OpenAI Whisper, text → Gemini {PROXY_MODE ? 'via your private proxy' : 'directly'} —
+          one request per step, failed evaluations never re-bill transcription. No keys in code or
+          git. Parental consent required before recording.
         </footer>
       </main>
 
-      <ApiKeyModal open={showKeys} initial={keys} onSave={handleSaveKeys} />
+      <ConsentModal open={!consented} onAccept={() => { saveConsent(); setConsented(true); }} />
+      <ApiKeyModal
+        open={showKeys}
+        initial={remember ? getKeys() : keys}
+        canClose={Boolean(activeKeys().openai && activeKeys().gemini)}
+        remember={remember}
+        onSave={handleSaveKeys}
+        onClear={handleClearKeys}
+        onClose={() => setShowKeys(false)}
+      />
     </div>
   );
 }
+
+// True when the app routes API calls through a self-hosted proxy
+// (VITE_PROXY_URL set at build time) instead of calling providers directly.
+const PROXY_MODE = Boolean(import.meta.env.VITE_PROXY_URL);
