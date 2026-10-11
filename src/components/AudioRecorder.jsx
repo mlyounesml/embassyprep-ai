@@ -42,6 +42,7 @@ export default function AudioRecorder({ status, onRecordingStart, onStopRecordin
   const audioCtxRef = useRef(null);
   const rafRef = useRef(null);
   const urlRef = useRef(null);
+  const secondsRef = useRef(0);
   const recording = status === 'Listening';
 
   useEffect(
@@ -111,14 +112,16 @@ export default function AudioRecorder({ status, onRecordingStart, onStopRecordin
         urlRef.current = url;
         setAudioUrl(url);
         setLevels(new Array(BARS).fill(0.1));
-        onStopRecording(blob, url);
+        onStopRecording(blob, url, secondsRef.current);
         stopTracks();
       };
       rec.start();
       watchLevels(stream);
       setSeconds(0);
+      secondsRef.current = 0;
       timerRef.current = setInterval(() => {
         setSeconds((s) => {
+          secondsRef.current = s + 1;
           if (s + 1 >= MAX_SECONDS) {
             stop();
             setError('Stopped at the 2-minute limit. Short answers score higher anyway.');

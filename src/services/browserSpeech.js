@@ -6,6 +6,16 @@ export function speechSupported() {
   return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
 }
 
+// Brave ships the API shape but blocks Google's transcription servers,
+// so recognition always fails there — we skip straight to on-device Whisper.
+export async function isBrave() {
+  try {
+    return Boolean(await navigator.brave?.isBrave());
+  } catch {
+    return false;
+  }
+}
+
 export function ttsSupported() {
   if (typeof window === 'undefined') return false;
   return Boolean(window.speechSynthesis);

@@ -8,8 +8,10 @@ import FeedbackCard from './components/FeedbackCard.jsx';
 import ProgressTracker from './components/ProgressTracker.jsx';
 import ConsentModal from './components/ConsentModal.jsx';
 import { analyzeAnswer } from './services/localEval.js';
+import { transcribeOnDevice } from './services/onnxWhisper.js';
 import {
   speechSupported,
+  isBrave,
   createRecognition,
   speak,
   stopSpeaking,
@@ -26,6 +28,7 @@ const STATUS_LABEL = {
   Idle: 'Idle — press Record',
   Listening: 'Listening… speak clearly',
   Scoring: 'Scoring on your device…',
+  Transcribing: 'Transcribing on your device…',
   Complete: 'Complete — check feedback',
 };
 
@@ -39,9 +42,19 @@ export default function App() {
   const [error, setError] = useState('');
   const [interim, setInterim] = useState('');
   const [typed, setTyped] = useState('');
+  const [braveMode, setBraveMode] = useState(false);
+  const [dlPct, setDlPct] = useState(null);
   const recRef = useRef(null);
   const finalsRef = useRef([]);
+  const blobRef = useRef(null);
+  const recSecRef = useRef(0);
   const supported = speechSupported();
+
+  useEffect(() => {
+    isBrave().then((b) => {
+      if (b) setBraveMode(true);
+    });
+  }, []);
 
   useEffect(() => () => stopSpeaking(), []);
 
@@ -50,7 +63,8 @@ export default function App() {
   const transcript = attempt.transcript || '';
   const evaluation = attempt.evaluation || null;
   const locked = Boolean(evaluation && !evaluation.mastered && !attempt.skipped);
-  const busy = status === 'Listening' || status === 'Scoring';
+  const busy = status === 'Listening' || status === 'Scoring' || status === 'Transcribing';
+  const liveVoice = supported && !braveMode;
 
   function persist(next) {
     setResults(next);
@@ -107,20 +121,47 @@ export default function App() {
     const text = finals.map((f) => f.text).join(' ').trim();
     setInterim('');
     if (!text) {
+      // No live transcript — fall back to the on-device Whisper model
+      // (covers Brave, Safari, Firefox, blocked Google service).
+      const blob = blobRef.current?.blob;
+      if (blob) {
+        transcribeWithModel(blob);
+        return;
+      }
       setError('No speech detected — speak louder/closer, or type your answer below.');
       setStatus('Idle');
       return;
     }
-    const durationSec =
+    scoreText(
+      text,
       finals.length > 1
         ? Math.max(1, Math.round((finals[finals.length - 1].at - finals[0].at) / 1000))
-        : Math.max(1, Math.round(text.split(/\s+/).length / 2));
-    const ev = analyzeAnswer({
-      transcript: text,
-      durationSec,
-      pauseCount: finals.pauses || 0,
-      keywords: question.keywords,
-    });
+        : Math.max(1, Math.round(text.split(/\s+/).length / 2)),
+      finals.pauses || 0,
+    );
+  }
+
+  async function transcribeWithModel(blob) {
+    setStatus('Transcribing');
+    setDlPct(null);
+    setError('');
+    try {
+      const text = await transcribeOnDevice(blob, (p) => setDlPct(Math.round(p * 100)));
+      setDlPct(null);
+      const secs = Math.max(1, recSecRef.current || Math.round(text.split(/\s+/).length / 2));
+      scoreText(text, secs, 0);
+    } catch (e) {
+      setDlPct(null);
+      setStatus('Idle');
+      setError(
+        (e?.message || 'On-device transcription failed.') +
+          ' First use downloads a ~40MB model (needs internet once). Or type the answer below.',
+      );
+    }
+  }
+
+  function scoreText(text, durationSec, pauseCount) {
+    const ev = analyzeAnswer({ transcript: text, durationSec, pauseCount, keywords: question.keywords });
     setAttempt(current, {
       transcript: text,
       evaluation: ev,
@@ -134,19 +175,24 @@ export default function App() {
   function handleRecordingStart() {
     setError('');
     stopSpeaking();
+    blobRef.current = null;
+    recSecRef.current = 0;
     setStatus('Listening');
-    startRecognition();
+    if (liveVoice) startRecognition();
   }
 
-  function handleStopRecording() {
-    // Stop transcription, then score from collected finals.
+  function handleStopRecording(blob, _url, secs) {
+    blobRef.current = { blob };
+    recSecRef.current = secs || 0;
+    // Stop live transcription, then score from collected finals
+    // (or fall back to the on-device model when there are none).
     setStatus('Scoring');
     try {
       recRef.current?.stop();
     } catch {
       // fall through
     }
-    // Safety net if onend never fires.
+    // Safety net if onend never fires (e.g. recognition never started).
     setTimeout(() => {
       setStatus((s) => {
         if (s === 'Scoring') setTimeout(finalize, 0);
@@ -244,15 +290,25 @@ export default function App() {
         <div className="flex items-center gap-2 text-sm font-semibold text-slate-600">
           {busy && <Loader2 size={16} className="animate-spin" />}
           Status: {STATUS_LABEL[status]}
+          {dlPct !== null && <span className="text-orange-600">· model {dlPct}%</span>}
         </div>
 
         {supported ? (
-          <AudioRecorder
-            key={current}
-            status={status}
-            onRecordingStart={handleRecordingStart}
-            onStopRecording={handleStopRecording}
-          />
+          <>
+            {braveMode && (
+              <p className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+                🛡️ Brave blocks Google&apos;s voice service, so this browser transcribes with a
+                small on-device model instead — free and private. First answer downloads it once
+                (~40MB, needs internet), then it works offline.
+              </p>
+            )}
+            <AudioRecorder
+              key={current}
+              status={status === 'Transcribing' ? 'Scoring' : status}
+              onRecordingStart={handleRecordingStart}
+              onStopRecording={handleStopRecording}
+            />
+          </>
         ) : (
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
             <p className="text-sm font-bold text-amber-800">
@@ -355,9 +411,9 @@ export default function App() {
         )}
 
         <footer className="pb-8 pt-2 text-center text-xs text-slate-400">
-          Keyless practice: transcription + scoring happen in this browser. No accounts, no cost.
-          Scores are training estimates (pace · fillers · pauses · key points) — not an official
-          evaluation.
+          Keyless practice: transcription + scoring happen in this browser (live service in
+          Chrome/Edge, on-device model elsewhere). No accounts, no cost. Scores are training
+          estimates (pace · fillers · pauses · key points) — not an official evaluation.
         </footer>
       </main>
 
